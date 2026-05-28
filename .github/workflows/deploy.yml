@@ -1,0 +1,353 @@
+# =============================================================================
+# ARM MCP Server — CI/CD Pipeline
+# =============================================================================
+#
+# Covers every deployment step from the README:
+#   1. Authenticate to Azure (OIDC — no stored secrets)
+#   2. Terraform init → validate → plan → apply
+#   3. Build and push container image to ACR
+#   4. Update Container App to the new image digest
+#   5. Verify the /health endpoint
+#
+# REQUIRED GITHUB SECRETS  (Settings → Secrets and variables → Actions)
+# -----------------------------------------------------------------------
+#   AZURE_CLIENT_ID       App registration / service principal client ID
+#   AZURE_TENANT_ID       Entra tenant ID
+#   AZURE_SUBSCRIPTION_ID Azure subscription ID
+#
+# ONE-TIME AZURE SETUP (run once before first workflow execution)
+# -----------------------------------------------------------------------
+#   # 1. Create a service principal (or reuse the Entra app in this repo)
+#   az ad sp create-for-rbac --name "arm-mcp-github-actions" --skip-assignment
+#
+#   # 2. Grant Owner on the subscription (needed for role assignments in rbac.tf)
+#   az role assignment create \
+#     --assignee <clientId> \
+#     --role Owner \
+#     --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7
+#
+#   # 3. Add federated credential for this repo (replace <org>/<repo>)
+#   az ad app federated-credential create \
+#     --id <appObjectId> \
+#     --parameters '{
+#       "name": "github-main",
+#       "issuer": "https://token.actions.githubusercontent.com",
+#       "subject": "repo:<org>/<repo>:ref:refs/heads/main",
+#       "audiences": ["api://AzureADTokenExchange"]
+#     }'
+#
+#   # 4. Create a blob container for Terraform remote state
+#   az storage container create \
+#     --name tfstate \
+#     --account-name aimcpstorageacct \
+#     --auth-mode login
+#
+#   # 5. Grant the SP Storage Blob Data Contributor on the storage account
+#   az role assignment create \
+#     --assignee <clientId> \
+#     --role "Storage Blob Data Contributor" \
+#     --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.Storage/storageAccounts/aimcpstorageacct
+# =============================================================================
+
+name: Deploy ARM MCP Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deployment/**"
+      - "terraform/**"
+      - ".github/workflows/deploy.yml"
+
+  workflow_dispatch:
+    inputs:
+      run_terraform:
+        description: "Run Terraform (plan + apply)"
+        type: boolean
+        default: true
+      run_deploy:
+        description: "Build and deploy container image"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write  # required for OIDC token exchange
+  contents: read
+
+# Azure RM / AzureAD / AzAPI providers authenticate via OIDC — no stored secret
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  # Terraform remote state (Azure Blob backend)
+  ARM_BACKEND_STORAGE_ACCOUNT: aimcpstorageacct
+  ARM_BACKEND_CONTAINER: tfstate
+  ARM_BACKEND_KEY: arm-mcp-server.tfstate
+  ARM_BACKEND_RESOURCE_GROUP: RG_AI_Agent_MCP
+  # Deployment constants
+  RESOURCE_GROUP: RG_AI_Agent_MCP
+  ACR_NAME: armmcpacr
+  ACA_NAME: arm-mcp-server
+  HEALTH_URL: https://arm-mcp-server.politesky-a9d88b05.swedencentral.azurecontainerapps.io/health
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — Detect which paths changed so downstream jobs can decide to run
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+      deployment: ${{ steps.filter.outputs.deployment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed for git diff against HEAD~1
+
+      - name: Detect changed paths
+        id: filter
+        run: |
+          # On workflow_dispatch there is no diff — treat everything as changed
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "terraform=true"  >> $GITHUB_OUTPUT
+            echo "deployment=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^terraform/|^\.github/workflows/'; then
+            echo "terraform=true" >> $GITHUB_OUTPUT
+          else
+            echo "terraform=false" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED" | grep -qE '^deployment/|^\.github/workflows/'; then
+            echo "deployment=true" >> $GITHUB_OUTPUT
+          else
+            echo "deployment=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Terraform: provision / update all Azure infrastructure
+  # ---------------------------------------------------------------------------
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >
+      needs.changes.outputs.terraform == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.run_terraform == true))
+    defaults:
+      run:
+        working-directory: terraform
+    outputs:
+      health_endpoint: ${{ steps.tf-out.outputs.health_endpoint }}
+      mcp_endpoint: ${{ steps.tf-out.outputs.mcp_endpoint }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Azure login ────────────────────────────────────────────────────────
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Terraform ─────────────────────────────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+          terraform_wrapper: false
+
+      - name: Terraform init (Azure Blob backend)
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ env.ARM_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ env.ARM_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ env.ARM_BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ env.ARM_BACKEND_KEY }}" \
+            -backend-config="use_oidc=true" \
+            -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Capture Terraform outputs
+        id: tf-out
+        run: |
+          echo "health_endpoint=$(terraform output -raw health_endpoint)" >> $GITHUB_OUTPUT
+          echo "mcp_endpoint=$(terraform output -raw mcp_endpoint)"       >> $GITHUB_OUTPUT
+          echo ""
+          echo "=== Terraform outputs ==="
+          terraform output
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — Build container image and deploy to Azure Container App
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    needs: [changes, terraform]
+    # Run when deployment files changed OR when terraform job ran (new infra needs fresh image)
+    if: >
+      always() &&
+      !failure() &&
+      !cancelled() &&
+      (
+        needs.changes.outputs.deployment == 'true' ||
+        needs.terraform.result == 'success'
+      ) &&
+      (
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && inputs.run_deploy == true)
+      )
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Azure login ────────────────────────────────────────────────────────
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Step 6: Build and push to ACR ─────────────────────────────────────
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry ${{ env.ACR_NAME }} \
+            --image arm-mcp:latest \
+            --no-wait \
+            ./deployment
+          echo "ACR build queued."
+
+      # ── Wait for build to complete ─────────────────────────────────────────
+      - name: Wait for ACR build
+        run: |
+          RUN_ID=$(az acr task list-runs \
+            --registry ${{ env.ACR_NAME }} \
+            --top 1 \
+            --query "[0].runId" -o tsv)
+          echo "Monitoring ACR run: $RUN_ID"
+
+          while true; do
+            STATUS=$(az acr task show-run \
+              --registry ${{ env.ACR_NAME }} \
+              --run-id "$RUN_ID" \
+              --query status -o tsv)
+            echo "$(date -u '+%H:%M:%S')  $STATUS"
+            [ "$STATUS" = "Running" ] || [ "$STATUS" = "Queued" ] || break
+            sleep 15
+          done
+
+          if [ "$STATUS" != "Succeeded" ]; then
+            echo "ACR build failed with status: $STATUS"
+            exit 1
+          fi
+          echo "Build succeeded."
+
+      # ── Get digest (avoids :latest no-op) ─────────────────────────────────
+      - name: Get image digest
+        id: digest
+        run: |
+          DIGEST=$(az acr manifest list-metadata \
+            --registry ${{ env.ACR_NAME }} \
+            --name arm-mcp \
+            --orderby time_desc \
+            --top 1 \
+            --query "[0].digest" -o tsv)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Image: ${{ env.ACR_NAME }}.azurecr.io/arm-mcp@$DIGEST"
+
+      # ── Step 7: Deploy new revision ───────────────────────────────────────
+      - name: Deploy new revision to Container App
+        run: |
+          NEW_REVISION=$(az containerapp update \
+            --name ${{ env.ACA_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image "${{ env.ACR_NAME }}.azurecr.io/arm-mcp@${{ steps.digest.outputs.digest }}" \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "Active revision: $NEW_REVISION"
+
+      # ── Step 8: Verify /health endpoint ───────────────────────────────────
+      - name: Verify server health
+        run: |
+          # Use the endpoint from Terraform outputs if available, else fall back to constant
+          HEALTH_URL="${{ needs.terraform.outputs.health_endpoint }}"
+          [ -z "$HEALTH_URL" ] && HEALTH_URL="${{ env.HEALTH_URL }}"
+          echo "Polling: $HEALTH_URL"
+
+          RESPONSE=""
+          for i in $(seq 1 18); do
+            RESPONSE=$(curl -sf "$HEALTH_URL" 2>/dev/null) && break
+            echo "Attempt $i/18 — server not ready yet, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ -z "$RESPONSE" ]; then
+            echo "Health check timed out after 3 minutes."
+            exit 1
+          fi
+
+          echo "Response: $RESPONSE"
+
+          python3 - "$RESPONSE" <<'EOF'
+          import sys, json
+          try:
+              d = json.loads(sys.argv[1])
+          except Exception as e:
+              print(f"Invalid JSON: {e}")
+              sys.exit(1)
+
+          status  = d.get("status")
+          tools   = d.get("tools", 0)
+          version = d.get("version", "unknown")
+          warnings = d.get("sdk_warnings", [])
+
+          if status != "ok":
+              print(f"FAIL — unexpected status: {status}")
+              sys.exit(1)
+          if tools < 22:
+              print(f"FAIL — expected 22 tools, got {tools}")
+              sys.exit(1)
+          if warnings:
+              print(f"WARNING — SDK issues: {warnings}")
+
+          print(f"Server healthy — version {version}, {tools} tools loaded")
+          EOF
+
+      - name: Print deployment summary
+        if: success()
+        run: |
+          HEALTH_URL="${{ needs.terraform.outputs.health_endpoint }}"
+          [ -z "$HEALTH_URL" ] && HEALTH_URL="${{ env.HEALTH_URL }}"
+          MCP_URL="${{ needs.terraform.outputs.mcp_endpoint }}"
+          [ -z "$MCP_URL" ] && MCP_URL="${HEALTH_URL/\/health//mcp}"
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║         ARM MCP Server — Deployment complete     ║"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║  MCP endpoint  : $MCP_URL"
+          echo "║  Health        : $HEALTH_URL"
+          echo "║  Image digest  : ${{ steps.digest.outputs.digest }}"
+          echo "╚══════════════════════════════════════════════════╝"
