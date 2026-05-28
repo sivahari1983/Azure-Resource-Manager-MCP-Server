@@ -30,8 +30,6 @@ build/
 .venv
 venv/
 
-# PDF diagram (generated file — not source)
-*.pdf
 
 # OS
 .DS_Store
