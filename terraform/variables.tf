@@ -1,24 +1,21 @@
 variable "subscription_id" {
   type        = string
-  description = "Azure subscription ID where the ARM MCP Server will be deployed"
-  default     = "0f524912-b0f4-4d41-92b2-db557f74e0e7"
+  description = "Azure subscription ID where the ARM MCP Server will be deployed (az account show --query id -o tsv)"
 }
 
 variable "tenant_id" {
   type        = string
-  description = "Azure AD / Entra ID tenant ID"
+  description = "Azure AD / Entra ID tenant ID (az account show --query tenantId -o tsv)"
 }
 
 variable "resource_group_name" {
   type        = string
-  description = "Existing resource group name"
-  default     = "RG_AI_Agent_MCP"
+  description = "Existing resource group name where all resources will be created"
 }
 
 variable "location" {
   type        = string
-  description = "Azure region for new resources"
-  default     = "swedencentral"
+  description = "Azure region for new resources (e.g. eastus, westeurope, swedencentral)"
 }
 
 # ---------------------------------------------------------------------------
@@ -55,11 +52,11 @@ variable "container_image" {
 
 variable "acr_name" {
   type        = string
-  description = "Globally unique Azure Container Registry name (3-50 alphanumeric chars)"
+  description = "Globally unique Azure Container Registry name (3-50 alphanumeric chars, no hyphens)"
 }
 
 # ---------------------------------------------------------------------------
-# Pre-existing Entra App (hardcoded in main.bicep — do not change)
+# Entra App Registration (protects the /mcp endpoint)
 # ---------------------------------------------------------------------------
 
 variable "entra_app_client_secret" {
@@ -71,38 +68,33 @@ variable "entra_app_client_secret" {
 
 variable "entra_app_client_id" {
   type        = string
-  description = "Client ID of the pre-provisioned Entra App used to authenticate MCP clients"
-  default     = "3fbf7d06-e265-4c2a-8abe-38184c70c6aa"
+  description = "Client ID (Application ID) of the Entra App Registration used to authenticate MCP clients"
 }
 
 variable "entra_app_service_principal_object_id" {
   type        = string
-  description = "Object ID of the Entra App's service principal (resourceId in MS Graph)"
-  default     = "8dc1ea05-0eb8-4aa6-941b-ca13e6bb4863"
+  description = "Object ID of the Entra App's service principal (visible in Enterprise Applications in the portal)"
 }
 
 variable "entra_app_role_id" {
   type        = string
-  description = "App role ID on the Entra App that grants MCP tool access"
-  default     = "38880a45-4205-421f-9c21-831a2b14b2d6"
+  description = "App role ID defined on the Entra App that grants MCP tool access (a GUID you assign when creating the role)"
 }
 
 # ---------------------------------------------------------------------------
-# Foundry project (the agent that will call this MCP server)
+# Foundry project (the AI agent that will call this MCP server)
 # ---------------------------------------------------------------------------
 
 variable "foundry_project_resource_id" {
   type        = string
-  description = "Full resource ID of the Azure AI Foundry project whose MI gets the Entra App role"
-  default     = "/subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.CognitiveServices/accounts/mcp-agent-azure/projects/mcp-agent-azure"
+  description = "Full resource ID of the Azure AI Foundry project whose managed identity gets the Entra App role. Format: /subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<ACCOUNT>/projects/<PROJECT>"
 }
 
 # ---------------------------------------------------------------------------
-# Storage (for Reader role — mirrors the Bicep setup)
+# Storage account (data-plane Reader role)
 # ---------------------------------------------------------------------------
 
 variable "storage_resource_id" {
   type        = string
-  description = "Full resource ID of the storage account the MCP server should be able to read"
-  default     = "/subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.Storage/storageAccounts/aimcpstorageacct"
+  description = "Full resource ID of the storage account the MCP server should be able to read. Format: /subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.Storage/storageAccounts/<ACCOUNT>"
 }

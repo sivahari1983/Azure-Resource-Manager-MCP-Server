@@ -9,22 +9,32 @@
 #   4. Update Container App to the new image digest
 #   5. Verify the /health endpoint
 #
-# REQUIRED GITHUB SECRETS  (Settings → Secrets and variables → Actions)
+# REQUIRED GITHUB SECRETS  (Settings → Secrets and variables → Actions → Secrets)
 # -----------------------------------------------------------------------
 #   AZURE_CLIENT_ID       App registration / service principal client ID
 #   AZURE_TENANT_ID       Entra tenant ID
 #   AZURE_SUBSCRIPTION_ID Azure subscription ID
 #
+# REQUIRED GITHUB VARIABLES  (Settings → Secrets and variables → Actions → Variables)
+# -----------------------------------------------------------------------
+#   AZURE_RESOURCE_GROUP         Resource group name (e.g. rg-arm-mcp-server)
+#   ACR_NAME                     Azure Container Registry name (e.g. armmcpserver)
+#   ACA_NAME                     Container App name (e.g. arm-mcp-server)
+#   TF_BACKEND_RESOURCE_GROUP    Resource group containing the Terraform state storage account
+#   TF_BACKEND_STORAGE_ACCOUNT   Storage account name for Terraform remote state
+#   HEALTH_URL                   Full URL to the /health endpoint (set after first deploy)
+#                                e.g. https://<app-name>.<env-id>.<region>.azurecontainerapps.io/health
+#
 # ONE-TIME AZURE SETUP (run once before first workflow execution)
 # -----------------------------------------------------------------------
-#   # 1. Create a service principal (or reuse the Entra app in this repo)
+#   # 1. Create a service principal
 #   az ad sp create-for-rbac --name "arm-mcp-github-actions" --skip-assignment
 #
 #   # 2. Grant Owner on the subscription (needed for role assignments in rbac.tf)
 #   az role assignment create \
 #     --assignee <clientId> \
 #     --role Owner \
-#     --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7
+#     --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>
 #
 #   # 3. Add federated credential for this repo (replace <org>/<repo>)
 #   az ad app federated-credential create \
@@ -39,14 +49,14 @@
 #   # 4. Create a blob container for Terraform remote state
 #   az storage container create \
 #     --name tfstate \
-#     --account-name aimcpstorageacct \
+#     --account-name <YOUR_STORAGE_ACCOUNT> \
 #     --auth-mode login
 #
 #   # 5. Grant the SP Storage Blob Data Contributor on the storage account
 #   az role assignment create \
 #     --assignee <clientId> \
 #     --role "Storage Blob Data Contributor" \
-#     --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.Storage/storageAccounts/aimcpstorageacct
+#     --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/<YOUR_RESOURCE_GROUP>/providers/Microsoft.Storage/storageAccounts/<YOUR_STORAGE_ACCOUNT>
 # =============================================================================
 
 name: Deploy ARM MCP Server
@@ -80,16 +90,17 @@ env:
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_USE_OIDC: "true"
-  # Terraform remote state (Azure Blob backend)
-  ARM_BACKEND_STORAGE_ACCOUNT: aimcpstorageacct
-  ARM_BACKEND_CONTAINER: tfstate
-  ARM_BACKEND_KEY: arm-mcp-server.tfstate
-  ARM_BACKEND_RESOURCE_GROUP: RG_AI_Agent_MCP
-  # Deployment constants
-  RESOURCE_GROUP: RG_AI_Agent_MCP
-  ACR_NAME: armmcpacr
-  ACA_NAME: arm-mcp-server
-  HEALTH_URL: https://arm-mcp-server.politesky-a9d88b05.swedencentral.azurecontainerapps.io/health
+  # Terraform remote state (Azure Blob backend) — set these in GitHub Variables
+  ARM_BACKEND_RESOURCE_GROUP: ${{ vars.TF_BACKEND_RESOURCE_GROUP }}
+  ARM_BACKEND_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}
+  ARM_BACKEND_CONTAINER: "tfstate"
+  ARM_BACKEND_KEY: "arm-mcp-server.tfstate"
+  # Deployment constants — set these in GitHub Variables
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  ACA_NAME: ${{ vars.ACA_NAME }}
+  # Health check URL — set this in GitHub Variables after the first deploy
+  HEALTH_URL: ${{ vars.HEALTH_URL }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -291,7 +302,7 @@ jobs:
       # ── Step 8: Verify /health endpoint ───────────────────────────────────
       - name: Verify server health
         run: |
-          # Use the endpoint from Terraform outputs if available, else fall back to constant
+          # Use the endpoint from Terraform outputs if available, else fall back to the GitHub Variable
           HEALTH_URL="${{ needs.terraform.outputs.health_endpoint }}"
           [ -z "$HEALTH_URL" ] && HEALTH_URL="${{ env.HEALTH_URL }}"
           echo "Polling: $HEALTH_URL"

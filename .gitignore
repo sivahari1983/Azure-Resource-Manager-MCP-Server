@@ -10,6 +10,12 @@ terraform/*_override.tf
 terraform/*_override.tf.json
 terraform/.terraformrc
 terraform/terraform.rc
+# User-specific values — copy terraform.tfvars.example and fill in your values
+terraform/terraform.tfvars
+# Backend config with real storage account details
+terraform/backend.hcl
+# Ignore any extracted zip copy of this repo
+Azure-Resource-Manager-MCP-main/
 
 # Python
 __pycache__/

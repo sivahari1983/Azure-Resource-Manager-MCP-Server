@@ -16,14 +16,14 @@ terraform {
     }
   }
 
-  # Remote state in the existing storage account — values supplied via
-  # -backend-config flags in CI (deploy.yml) or terraform init locally.
-  backend "azurerm" {
-    resource_group_name  = "RG_AI_Agent_MCP"
-    storage_account_name = "aimcpstorageacct"
-    container_name       = "tfstate"
-    key                  = "arm-mcp-server.tfstate"
-  }
+  # Remote state backend — all values are supplied externally so nothing
+  # environment-specific is hard-coded here.
+  #
+  # Local:  terraform init -backend-config=backend.hcl
+  #         (copy backend.hcl.example → backend.hcl and fill in your values)
+  #
+  # CI:     deploy.yml passes -backend-config flags from GitHub Variables.
+  backend "azurerm" {}
 }
 
 provider "azurerm" {

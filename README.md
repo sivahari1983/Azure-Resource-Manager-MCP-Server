@@ -11,12 +11,12 @@ A custom Python **Model Context Protocol (MCP) server** that exposes Azure Resou
 ```mermaid
 flowchart TB
     subgraph Foundry["Azure AI Foundry"]
-        Agent["Foundry Agent\nmcp-agent-azure"]
+        Agent["Foundry Agent\n<your-agent-name>"]
         ProjectMI["Project Managed Identity"]
     end
 
     subgraph EntraID["Entra ID"]
-        EntraApp["Entra App\napi://3fbf7d06-..."]
+        EntraApp["Entra App\napi://<YOUR_ENTRA_APP_CLIENT_ID>"]
         JWKS["JWKS Endpoint\nlogin.microsoftonline.com\n/discovery/v2.0/keys"]
     end
 
@@ -56,7 +56,7 @@ flowchart TB
         AKS["Azure AKS\nContainerServiceClient"]
     end
 
-    ProjectMI -- "1 · request token\naudience: api://3fbf7d06-..." --> EntraApp
+    ProjectMI -- "1 · request token\naudience: api://<YOUR_ENTRA_APP_CLIENT_ID>" --> EntraApp
     EntraApp -- "2 · Bearer token" --> Agent
     Agent -- "3 · POST /mcp\nAuthorization: Bearer ..." --> Envoy
     Envoy -- "4 · HTTP:8080" --> Middleware
@@ -137,17 +137,18 @@ flowchart TB
 │   └── Dockerfile          # Python 3.11-slim container, port 8080
 │
 └── terraform/
-    ├── providers.tf          # azurerm + azuread + azapi providers
-    ├── variables.tf          # All input variables (with defaults)
-    ├── locals.tf             # Computed values
-    ├── acr.tf                # Azure Container Registry
-    ├── identity.tf           # User-assigned managed identity + AcrPull
-    ├── aca.tf                # Container Apps Environment + Container App
-    ├── rbac.tf               # 17 role assignments across all Azure services
-    ├── foundry.tf            # Foundry project MI → Entra App role assignment
-    ├── foundry_mcp_connection.tf  # MCP connection in the Foundry project
-    ├── outputs.tf            # URLs, client IDs, build commands
-    └── terraform.tfvars      # Your values (subscription ID, tenant ID, etc.)
+    ├── providers.tf              # azurerm + azuread + azapi providers
+    ├── variables.tf              # All input variables (with descriptions)
+    ├── locals.tf                 # Computed values
+    ├── acr.tf                    # Azure Container Registry
+    ├── identity.tf               # User-assigned managed identity + AcrPull
+    ├── aca.tf                    # Container Apps Environment + Container App
+    ├── rbac.tf                   # 17 role assignments across all Azure services
+    ├── foundry.tf                # Foundry project MI → Entra App role assignment
+    ├── foundry_mcp_connection.tf # MCP connection in the Foundry project
+    ├── outputs.tf                # URLs, client IDs, build commands
+    ├── terraform.tfvars.example  # Template — copy to terraform.tfvars and fill in values
+    └── backend.hcl.example       # Template — copy to backend.hcl for local Terraform init
 ```
 
 ---
@@ -184,7 +185,7 @@ Your account needs the following on the target subscription:
 az login
 
 # If you have multiple subscriptions, pin the correct one
-az account set --subscription "0f524912-b0f4-4d41-92b2-db557f74e0e7"
+az account set --subscription "<YOUR_SUBSCRIPTION_ID>"
 
 # Confirm
 az account show --query "{name:name, id:id, tenantId:tenantId}"
@@ -192,53 +193,99 @@ az account show --query "{name:name, id:id, tenantId:tenantId}"
 
 ---
 
-## Step 2 — Configure `terraform.tfvars`
+## Step 2 — Set up the Entra App Registration
 
-Open `terraform/terraform.tfvars`. The file already has the correct values for the shared infrastructure. The only value you may need to set is `tenant_id` if it differs from the example:
+This server validates Bearer tokens issued for a specific Entra App Registration. You need to create one (or use an existing one) and note the following values for `terraform.tfvars`:
 
-```powershell
-# Get your tenant ID
-az account show --query tenantId -o tsv
-```
-
-`terraform.tfvars` reference:
-
-```hcl
-subscription_id     = "0f524912-b0f4-4d41-92b2-db557f74e0e7"
-tenant_id           = "<your-tenant-id>"        # from az account show
-
-resource_group_name = "RG_AI_Agent_MCP"         # must already exist
-location            = "swedencentral"
-
-acr_name            = "armmcpacr"               # must be globally unique, 3-50 alphanumeric
-
-aca_name            = "arm-mcp-server"
-aca_min_replicas    = 0                          # 0 = scale to zero when idle
-aca_max_replicas    = 3
-
-# Pre-provisioned Entra App — do not change these values
-entra_app_client_id                   = "3fbf7d06-e265-4c2a-8abe-38184c70c6aa"
-entra_app_service_principal_object_id = "8dc1ea05-0eb8-4aa6-941b-ca13e6bb4863"
-entra_app_role_id                     = "38880a45-4205-421f-9c21-831a2b14b2d6"
-
-# Existing Foundry project and storage account
-foundry_project_resource_id = "/subscriptions/0f524912-.../projects/mcp-agent-azure"
-storage_resource_id         = "/subscriptions/0f524912-.../storageAccounts/aimcpstorageacct"
-```
-
-> **ACR name** must be globally unique across all Azure accounts. If `armmcpacr` is taken, append a short suffix (e.g. `armmcpacr01`).
+1. Go to [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID → App registrations → New registration**
+2. Give it a name (e.g. `arm-mcp-server`) and click **Register**
+3. Note the **Application (client) ID** → `entra_app_client_id`
+4. Go to **Enterprise applications**, find your app, note the **Object ID** → `entra_app_service_principal_object_id`
+5. In the App registration, go to **App roles → Create app role**:
+   - Display name: `MCP.Access`
+   - Allowed member types: `Applications`
+   - Value: `MCP.Access`
+   - Note the generated GUID → `entra_app_role_id`
+6. Under **Expose an API**, set the Application ID URI to `api://<YOUR_ENTRA_APP_CLIENT_ID>`
 
 ---
 
-## Step 3 — Initialise Terraform
+## Step 3 — Configure `terraform.tfvars`
+
+```powershell
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Open `terraform/terraform.tfvars` and fill in your values:
+
+```hcl
+subscription_id = "<YOUR_SUBSCRIPTION_ID>"   # az account show --query id -o tsv
+tenant_id       = "<YOUR_TENANT_ID>"         # az account show --query tenantId -o tsv
+
+resource_group_name = "<YOUR_RESOURCE_GROUP>"
+location            = "<YOUR_AZURE_REGION>"  # e.g. "eastus"
+
+acr_name = "<YOUR_ACR_NAME>"                 # globally unique, e.g. "myarmmcpacr"
+
+aca_name         = "arm-mcp-server"
+aca_min_replicas = 0
+aca_max_replicas = 3
+
+entra_app_client_id                   = "<YOUR_ENTRA_APP_CLIENT_ID>"
+entra_app_service_principal_object_id = "<YOUR_ENTRA_APP_SP_OBJECT_ID>"
+entra_app_role_id                     = "<YOUR_ENTRA_APP_ROLE_ID>"
+
+foundry_project_resource_id = "/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<ACCOUNT>/projects/<PROJECT>"
+
+storage_resource_id = "/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.Storage/storageAccounts/<ACCOUNT>"
+```
+
+> **Note:** `terraform.tfvars` is gitignored — your real values will never be committed.
+
+> **ACR name** must be globally unique across all Azure accounts. Append a short suffix if needed (e.g. `myarmmcp01`).
+
+---
+
+## Step 4 — Configure Terraform remote state (optional but recommended)
+
+Terraform state is stored remotely in an Azure Blob container. Create the backend config:
+
+```powershell
+cp terraform/backend.hcl.example terraform/backend.hcl
+```
+
+Fill in `terraform/backend.hcl`:
+
+```hcl
+resource_group_name  = "<YOUR_RESOURCE_GROUP>"
+storage_account_name = "<YOUR_STORAGE_ACCOUNT>"
+container_name       = "tfstate"
+key                  = "arm-mcp-server.tfstate"
+```
+
+Create the blob container if it doesn't exist:
+
+```powershell
+az storage container create `
+  --name tfstate `
+  --account-name <YOUR_STORAGE_ACCOUNT> `
+  --auth-mode login
+```
+
+---
+
+## Step 5 — Initialise Terraform
 
 ```powershell
 cd terraform
 
-terraform init
-```
+# With remote state (recommended)
+terraform init -backend-config=backend.hcl
 
-This downloads the three providers: `azurerm`, `azuread`, and `azapi`.
+# Without remote state (local state only)
+terraform init -backend=false
+```
 
 Expected output:
 ```
@@ -247,13 +294,13 @@ Terraform has been successfully initialized!
 
 ---
 
-## Step 4 — Preview the deployment plan
+## Step 6 — Preview the deployment plan
 
 ```powershell
 terraform plan -out=tfplan
 ```
 
-Review the plan. You should see approximately **12 resources** to create:
+Review the plan. You should see approximately **23 resources** to create:
 
 | Resource | Count |
 |---|---|
@@ -269,42 +316,40 @@ If you see errors in `plan`, the most common causes are:
 
 - **ACR name already taken** — change `acr_name` in `terraform.tfvars`
 - **Insufficient permissions** — ensure your account has Owner/UAA on the subscription
-- **Resource group does not exist** — create `RG_AI_Agent_MCP` first:
+- **Resource group does not exist** — create it first:
   ```powershell
-  az group create --name RG_AI_Agent_MCP --location swedencentral
+  az group create --name <YOUR_RESOURCE_GROUP> --location <YOUR_AZURE_REGION>
   ```
 
 ---
 
-## Step 5 — Apply the infrastructure
+## Step 7 — Apply the infrastructure
 
 ```powershell
 terraform apply tfplan
 ```
-
-Type `yes` when prompted (skip if you used `-auto-approve`).
 
 This takes approximately **3–5 minutes**. When complete, Terraform prints the outputs:
 
 ```
 Outputs:
 
-acr_login_server      = "armmcpacr.azurecr.io"
+acr_login_server      = "<YOUR_ACR_NAME>.azurecr.io"
 container_app_name    = "arm-mcp-server"
-docker_build_command  = "az acr build --registry armmcpacr --image arm-mcp:latest ./deployment"
-foundry_mcp_audience  = "api://3fbf7d06-e265-4c2a-8abe-38184c70c6aa"
-foundry_mcp_endpoint  = "https://arm-mcp-server.<env>.swedencentral.azurecontainerapps.io/mcp"
-mcp_endpoint          = "https://arm-mcp-server.<env>.swedencentral.azurecontainerapps.io/mcp"
-health_endpoint       = "https://arm-mcp-server.<env>.swedencentral.azurecontainerapps.io/health"
+docker_build_command  = "az acr build --registry <YOUR_ACR_NAME> --image arm-mcp:latest ./deployment"
+foundry_mcp_audience  = "api://<YOUR_ENTRA_APP_CLIENT_ID>"
+foundry_mcp_endpoint  = "https://arm-mcp-server.<env-id>.<region>.azurecontainerapps.io/mcp"
+mcp_endpoint          = "https://arm-mcp-server.<env-id>.<region>.azurecontainerapps.io/mcp"
+health_endpoint       = "https://arm-mcp-server.<env-id>.<region>.azurecontainerapps.io/health"
 ```
 
 Save these — you need them in later steps.
 
 ---
 
-## Step 6 — Build and push the container image
+## Step 8 — Build and push the container image
 
-The Container App was provisioned but has no image yet (it will show `Provisioning` or fail to start until the image exists). Build and push from the **repository root**:
+The Container App was provisioned but has no image yet (it will show `Provisioning` until the image exists). Build and push from the **repository root**:
 
 ```powershell
 # From the repo root (one level above terraform/)
@@ -312,12 +357,10 @@ cd ..
 
 # Build and push directly to ACR (no local Docker daemon needed)
 az acr build `
-  --registry armmcpacr `
+  --registry <YOUR_ACR_NAME> `
   --image arm-mcp:latest `
   ./deployment
 ```
-
-This builds the `Dockerfile` in `deployment/` inside ACR and pushes it automatically.
 
 Expected output ends with:
 ```
@@ -326,61 +369,49 @@ Run ID: ca1 was successful after Xs
 
 ---
 
-## Step 7 — Restart the Container App to pull the new image
-
-```powershell
-az containerapp revision restart `
-  --name arm-mcp-server `
-  --resource-group RG_AI_Agent_MCP `
-  --revision $(az containerapp revision list `
-      --name arm-mcp-server `
-      --resource-group RG_AI_Agent_MCP `
-      --query "[0].name" -o tsv)
-```
-
-Or force a new revision by touching the container image tag:
+## Step 9 — Restart the Container App to pull the new image
 
 ```powershell
 az containerapp update `
   --name arm-mcp-server `
-  --resource-group RG_AI_Agent_MCP `
-  --image armmcpacr.azurecr.io/arm-mcp:latest
+  --resource-group <YOUR_RESOURCE_GROUP> `
+  --image <YOUR_ACR_NAME>.azurecr.io/arm-mcp:latest
 ```
 
 ---
 
-## Step 8 — Verify the server is running
+## Step 10 — Verify the server is running
 
 ```powershell
-# Substitute your actual FQDN from the terraform output
-$fqdn = (terraform -chdir=terraform output -raw foundry_mcp_endpoint)
+# Get the health URL from Terraform output
+$healthUrl = (terraform -chdir=terraform output -raw health_endpoint)
 
-# Health check — should return {"status":"ok","server":"azure-resource-manager","version":"2.0.0","tools":22}
-Invoke-RestMethod "$fqdn/health"
+# Should return {"status":"ok","server":"azure-resource-manager","version":"2.0.0","tools":22}
+Invoke-RestMethod $healthUrl
 
 # Check Container App logs
 az containerapp logs show `
   --name arm-mcp-server `
-  --resource-group RG_AI_Agent_MCP `
+  --resource-group <YOUR_RESOURCE_GROUP> `
   --follow
 ```
 
 ---
 
-## Step 9 — Connect the MCP server to your Foundry agent
+## Step 11 — Connect the MCP server to your Foundry agent
 
 The Terraform `foundry_mcp_connection.tf` creates the connection automatically. To confirm it exists:
 
 ```powershell
 az rest `
   --method GET `
-  --url "https://management.azure.com/subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.CognitiveServices/accounts/mcp-agent-azure/projects/mcp-agent-azure/connections?api-version=2025-04-01-preview"
+  --url "https://management.azure.com<YOUR_FOUNDRY_PROJECT_RESOURCE_ID>/connections?api-version=2025-04-01-preview"
 ```
 
 If the `azapi` schema needs adjusting, add the connection manually in the portal:
 
 1. Go to **[ai.azure.com/nextgen](https://ai.azure.com/nextgen)**
-2. Open project **mcp-agent-azure**
+2. Open your Foundry project
 3. **Build → Agent → Tools → Add → Custom → Model Context Protocol**
 4. Fill in:
 
@@ -388,13 +419,13 @@ If the `azapi` schema needs adjusting, add the connection manually in the portal
    |---|---|
    | Remote MCP Server endpoint | value of `foundry_mcp_endpoint` output |
    | Authentication | **Microsoft Entra → Project Managed Identity** |
-   | Audience | value of `foundry_mcp_audience` output (`api://3fbf7d06-...`) |
+   | Audience | value of `foundry_mcp_audience` output (`api://<YOUR_ENTRA_APP_CLIENT_ID>`) |
 
 5. Click **Connect**
 
 ---
 
-## Step 10 — Test from the Foundry agent
+## Step 12 — Test from the Foundry agent
 
 In the Foundry agent chat, try these prompts:
 
@@ -440,10 +471,10 @@ Foundry agent MI token  (roles claim, no scp)
 
 ### Step A — Create a client secret for the Entra App
 
-1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory → App registrations**
-2. Open the app with client ID `3fbf7d06-e265-4c2a-8abe-38184c70c6aa`
+1. Go to [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID → App registrations**
+2. Open your App Registration
 3. **Certificates & secrets → New client secret**
-4. Set a description (e.g. `arm-mcp-obo`) and an expiry, then click **Add**
+4. Set a description and expiry, then click **Add**
 5. **Copy the secret value immediately** — it is only shown once
 
 ### Step B — Grant the API permission
@@ -473,24 +504,24 @@ Then rebuild and push the container image to activate the updated code:
 
 ```powershell
 # From the repo root
-az acr build --registry armmcpacr --image arm-mcp:latest ./deployment
+az acr build --registry <YOUR_ACR_NAME> --image arm-mcp:latest ./deployment
 
 # Get the new image digest and update the Container App
-$digest = az acr manifest list-metadata --registry armmcpacr --name arm-mcp `
+$digest = az acr manifest list-metadata --registry <YOUR_ACR_NAME> --name arm-mcp `
   --orderby time_desc --top 1 --query "[0].digest" -o tsv
 
 az containerapp update `
   --name arm-mcp-server `
-  --resource-group RG_AI_Agent_MCP `
-  --image "armmcpacr.azurecr.io/arm-mcp@$digest"
+  --resource-group <YOUR_RESOURCE_GROUP> `
+  --image "<YOUR_ACR_NAME>.azurecr.io/arm-mcp@$digest"
 ```
 
 ### Step D — Verify OBO is active
 
-The health endpoint now reports whether OBO is enabled:
+The health endpoint reports whether OBO is enabled:
 
 ```powershell
-Invoke-RestMethod "https://arm-mcp-server.politesky-a9d88b05.swedencentral.azurecontainerapps.io/health"
+Invoke-RestMethod "<YOUR_HEALTH_URL>"
 # Expected: { "status": "ok", "server": "azure-resource-manager", "version": "2.0.0", "tools": 22, "obo_enabled": true }
 ```
 
@@ -539,7 +570,7 @@ az ad sp create-for-rbac --name "arm-mcp-github-actions" --skip-assignment
 az role assignment create \
   --assignee <clientId> \
   --role Owner \
-  --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7
+  --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>
 
 # 3. Add a federated credential for OIDC (replace <org>/<repo>)
 az ad app federated-credential create \
@@ -554,27 +585,40 @@ az ad app federated-credential create \
 # 4. Create the Terraform remote state container
 az storage container create \
   --name tfstate \
-  --account-name aimcpstorageacct \
+  --account-name <YOUR_STORAGE_ACCOUNT> \
   --auth-mode login
 
 # 5. Grant the SP Storage Blob Data Contributor for Terraform state
 az role assignment create \
   --assignee <clientId> \
   --role "Storage Blob Data Contributor" \
-  --scope /subscriptions/0f524912-b0f4-4d41-92b2-db557f74e0e7/resourceGroups/RG_AI_Agent_MCP/providers/Microsoft.Storage/storageAccounts/aimcpstorageacct
+  --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/<YOUR_RESOURCE_GROUP>/providers/Microsoft.Storage/storageAccounts/<YOUR_STORAGE_ACCOUNT>
 ```
 
-### Required GitHub secrets
+### Required GitHub secrets and variables
 
 Go to **Settings → Secrets and variables → Actions** and add:
+
+**Secrets** (encrypted):
 
 | Secret | Value |
 |---|---|
 | `AZURE_CLIENT_ID` | Service principal client ID (from step 1 above) |
-| `AZURE_TENANT_ID` | `05764a73-8c6f-4538-83cd-413f1e1b5665` |
-| `AZURE_SUBSCRIPTION_ID` | `0f524912-b0f4-4d41-92b2-db557f74e0e7` |
+| `AZURE_TENANT_ID` | Your Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Your Azure subscription ID |
 
-> No client secret is stored — the workflow uses **OIDC federated credentials** (the `id-token: write` permission) to exchange a short-lived GitHub token for an Azure access token.
+**Variables** (plain text — visible in logs):
+
+| Variable | Value |
+|---|---|
+| `AZURE_RESOURCE_GROUP` | Resource group name (e.g. `rg-arm-mcp-server`) |
+| `ACR_NAME` | Azure Container Registry name |
+| `ACA_NAME` | Container App name (e.g. `arm-mcp-server`) |
+| `TF_BACKEND_RESOURCE_GROUP` | Resource group containing the state storage account |
+| `TF_BACKEND_STORAGE_ACCOUNT` | Storage account name for Terraform state |
+| `HEALTH_URL` | Full `/health` URL (set this after the first deploy) |
+
+> No client secret is stored — the workflow uses **OIDC federated credentials** to exchange a short-lived GitHub token for an Azure access token.
 
 ### What triggers each job
 
@@ -595,15 +639,15 @@ The easiest way is to push to `main` — the GitHub Actions workflow detects cha
 To update manually:
 
 ```powershell
-az acr build --registry armmcpacr --image arm-mcp:latest ./deployment
+az acr build --registry <YOUR_ACR_NAME> --image arm-mcp:latest ./deployment
 
-$digest = az acr manifest list-metadata --registry armmcpacr --name arm-mcp `
+$digest = az acr manifest list-metadata --registry <YOUR_ACR_NAME> --name arm-mcp `
   --orderby time_desc --top 1 --query "[0].digest" -o tsv
 
 az containerapp update `
   --name arm-mcp-server `
-  --resource-group RG_AI_Agent_MCP `
-  --image "armmcpacr.azurecr.io/arm-mcp@$digest"
+  --resource-group <YOUR_RESOURCE_GROUP> `
+  --image "<YOUR_ACR_NAME>.azurecr.io/arm-mcp@$digest"
 ```
 
 ---
@@ -645,17 +689,17 @@ And that `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` are all s
 
 ### GitHub Actions workflow fails on `terraform init`
 
-The `tfstate` container must exist in `aimcpstorageacct` before the first run, and the service principal needs `Storage Blob Data Contributor` on that storage account. Run steps 4 and 5 from the one-time setup above.
+The `tfstate` container must exist in your storage account before the first run, and the service principal needs `Storage Blob Data Contributor` on that storage account. Run steps 4 and 5 from the one-time setup above. Also confirm the GitHub Variables `TF_BACKEND_RESOURCE_GROUP` and `TF_BACKEND_STORAGE_ACCOUNT` are set.
 
 ### Container App not starting
 
 ```powershell
-az containerapp logs show --name arm-mcp-server --resource-group RG_AI_Agent_MCP
+az containerapp logs show --name arm-mcp-server --resource-group <YOUR_RESOURCE_GROUP>
 ```
 
 Common causes:
-- Image not yet pushed to ACR — run Step 6
-- `AZURE_SUBSCRIPTION_ID` not set — check `terraform.tfvars`
+- Image not yet pushed to ACR — run Step 8
+- `AZURE_SUBSCRIPTION_ID` not set in the Container App environment — check `terraform/aca.tf`
 - ACR name mismatch — verify `acr_name` in `terraform.tfvars` matches what was created
 
 ### `terraform apply` fails on role assignments
@@ -678,7 +722,7 @@ terraform import azurerm_role_assignment.<name> /subscriptions/.../roleAssignmen
 The Entra App role assignment for the Foundry project MI may not have propagated yet (can take up to 5 minutes). Check:
 
 ```powershell
-az ad app permission list-grants --id 3fbf7d06-e265-4c2a-8abe-38184c70c6aa
+az ad app permission list-grants --id <YOUR_ENTRA_APP_CLIENT_ID>
 ```
 
 ### `az acr build` fails — ACR not found
@@ -694,17 +738,17 @@ terraform -chdir=terraform output acr_login_server
 ## Infrastructure overview
 
 ```
-RG_AI_Agent_MCP  (existing resource group)
+<YOUR_RESOURCE_GROUP>  (existing resource group)
 │
-├── armmcpacr                     Azure Container Registry (Basic)
+├── <YOUR_ACR_NAME>               Azure Container Registry (Basic)
 │
 ├── arm-mcp-server-mi             User-Assigned Managed Identity
-│   ├── AcrPull                       → armmcpacr
+│   ├── AcrPull                       → <YOUR_ACR_NAME>
 │   ├── Reader                        → subscription (covers all ARM namespaces)
 │   ├── Virtual Machine Contributor   → subscription (start/stop/restart VMs)
 │   ├── Tag Contributor               → subscription (update resource tags)
-│   ├── Storage Blob Data Reader      → aimcpstorageacct
-│   ├── Storage Queue/Table Data Reader → aimcpstorageacct
+│   ├── Storage Blob Data Reader      → <YOUR_STORAGE_ACCOUNT>
+│   ├── Storage Queue/Table Data Reader → <YOUR_STORAGE_ACCOUNT>
 │   ├── Key Vault Secrets User        → subscription
 │   ├── Key Vault Reader              → subscription
 │   ├── Cognitive Services User       → subscription
@@ -718,13 +762,13 @@ RG_AI_Agent_MCP  (existing resource group)
 ├── arm-mcp-server-env            Container Apps Environment
 │
 └── arm-mcp-server                Container App
-    ├── Image: armmcpacr.azurecr.io/arm-mcp:latest
+    ├── Image: <YOUR_ACR_NAME>.azurecr.io/arm-mcp:latest
     ├── Port: 8080 (HTTPS external)
     ├── /mcp    — MCP Streamable HTTP endpoint
     ├── /health — health probe
     └── Identity: arm-mcp-server-mi
 
-Foundry project: mcp-agent-azure
+Foundry project: <YOUR_FOUNDRY_PROJECT>
 └── connections/arm-mcp-server    MCP connection → Container App URL
     └── Entra App role assignment → Foundry project MI can obtain tokens
 ```

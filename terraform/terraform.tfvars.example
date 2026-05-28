@@ -1,0 +1,45 @@
+# ============================================================================
+# ARM MCP Server — Terraform variable values (example)
+#
+# Copy this file to terraform.tfvars and fill in the values for your
+# environment. terraform.tfvars is gitignored so your real values are
+# never committed to the repository.
+# ============================================================================
+
+# --- Your Azure subscription and tenant ----------------------------------------
+subscription_id = "<YOUR_SUBSCRIPTION_ID>"   # az account show --query id -o tsv
+tenant_id       = "<YOUR_TENANT_ID>"         # az account show --query tenantId -o tsv
+
+# --- Resource group (must already exist) ---------------------------------------
+resource_group_name = "<YOUR_RESOURCE_GROUP>"   # e.g. "rg-arm-mcp-server"
+location            = "<YOUR_AZURE_REGION>"     # e.g. "eastus", "westeurope"
+
+# --- Azure Container Registry (name must be globally unique) -------------------
+acr_name = "<YOUR_ACR_NAME>"   # 3-50 alphanumeric chars, no hyphens, e.g. "armmcpserver"
+
+# --- Container App settings ----------------------------------------------------
+aca_name         = "arm-mcp-server"   # change if you want a different app name
+aca_min_replicas = 0                  # 0 = scale to zero when idle
+aca_max_replicas = 3
+
+# --- Entra App (the app registration that protects this MCP server) ------------
+# Create an App Registration in Entra ID and fill in the values below.
+# See README.md § "Setting up the Entra App" for step-by-step instructions.
+entra_app_client_id                   = "<YOUR_ENTRA_APP_CLIENT_ID>"
+entra_app_service_principal_object_id = "<YOUR_ENTRA_APP_SP_OBJECT_ID>"
+entra_app_role_id                     = "<YOUR_ENTRA_APP_ROLE_ID>"
+
+# Optional: set to enable OBO so human callers only see their own Azure resources.
+# Create a client secret under the App Registration and paste the value here.
+# Also grant "Azure Service Management – user_impersonation" API permission.
+# entra_app_client_secret = ""
+
+# --- Azure AI Foundry project (the agent that will call this MCP server) -------
+# Full resource ID of the Foundry project.
+# Format: /subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<ACCOUNT>/projects/<PROJECT>
+foundry_project_resource_id = "<YOUR_FOUNDRY_PROJECT_RESOURCE_ID>"
+
+# --- Storage account (for Reader role assignment) ------------------------------
+# Full resource ID of a storage account the MCP server should be able to read.
+# Format: /subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.Storage/storageAccounts/<ACCOUNT>
+storage_resource_id = "<YOUR_STORAGE_RESOURCE_ID>"

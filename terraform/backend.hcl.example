@@ -1,0 +1,14 @@
+# ============================================================================
+# Terraform remote state backend configuration (example)
+#
+# Copy this file to backend.hcl and fill in your values.
+# backend.hcl is gitignored — never commit it.
+#
+# Usage:
+#   terraform init -backend-config=backend.hcl
+# ============================================================================
+
+resource_group_name  = "<YOUR_RESOURCE_GROUP>"       # resource group that contains the storage account
+storage_account_name = "<YOUR_STORAGE_ACCOUNT>"      # storage account for Terraform state
+container_name       = "tfstate"                     # blob container name (create it first)
+key                  = "arm-mcp-server.tfstate"      # state file name within the container
