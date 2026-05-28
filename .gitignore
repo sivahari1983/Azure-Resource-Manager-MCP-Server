@@ -41,5 +41,6 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 
-# Claude Code local settings
+# Claude Code local settings and guidance (local-only, not for public repo)
 .claude/
+CLAUDE.md
