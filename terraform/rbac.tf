@@ -1,19 +1,27 @@
 # =============================================================================
 # RBAC role assignments for the ARM MCP Server managed identity
 #
-# Role strategy (mirrors the Bicep role-assignment modules in azmcp-foundry-aca-mi):
+# Scope strategy (controlled by management_group_id in terraform.tfvars):
 #
-#   Subscription-level Reader  →  covers all ARM metadata for:
-#                                  Cosmos DB, SQL Server, Azure OpenAI,
-#                                  Azure Search, Data Factory, Synapse,
-#                                  Log Analytics, Logic Apps, Azure Monitor,
-#                                  Application Insights, Resource Graph,
-#                                  Virtual Machines, Virtual Networks,
-#                                  App Service, Functions, AKS, Key Vault,
-#                                  Event Hubs, and any other ARM resource type
+#   management_group_id = "<YOUR_MG>"  →  local.rbac_scope resolves to the
+#         /providers/Microsoft.Management/managementGroups/<YOUR_MG> path,
+#         granting the MI access to ALL child subscriptions in that group.
 #
-#   Service-specific data-plane roles  →  added individually below for services
-#                                         that need access beyond ARM metadata
+#   management_group_id = ""  →  local.rbac_scope resolves to a single
+#         /subscriptions/${subscription_id} — single-subscription mode.
+#
+# Role strategy:
+#
+#   Reader (at scope)          →  covers all ARM metadata across every
+#                                  resource type in the scope
+#   Security Reader (at scope) →  Defender for Cloud alerts, secure scores,
+#                                  assessment results
+#   Service data-plane roles   →  added individually for services that need
+#                                  access beyond ARM metadata (Key Vault, Storage,
+#                                  VM operations, Cognitive Services, etc.)
+#
+#   Storage roles stay on var.storage_resource_id (specific account) — not
+#   elevated to MG scope since that would grant read access to all storage in all subs.
 #
 # Role definition IDs sourced from:
 #   https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
