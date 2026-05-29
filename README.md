@@ -30,11 +30,11 @@ flowchart TB
 
             subgraph MCPMethods["MCP methods"]
                 M1["initialize\n→ server capabilities"]
-                M2["tools/list\n→ 22 tool schemas"]
+                M2["tools/list\n→ 26 tool schemas"]
                 M3["tools/call\n→ tool dispatch"]
             end
 
-            subgraph ToolFns["Tool functions (22)"]
+            subgraph ToolFns["Tool functions (26)"]
                 F1["Resource Graph\ngenerate_query · validate_query · execute_query\nlist_subscriptions · list_sql_servers · list_sql_databases"]
                 F2["ARM Deployments\ncreate · status · cancel"]
                 F3["Subscriptions (ARM)\nlist_resource_groups · get_resource · update_resource_tags"]
@@ -42,6 +42,8 @@ flowchart TB
                 F5["Storage\nlist_storage_accounts · list_storage_containers"]
                 F6["Key Vault\nlist_key_vaults · list_key_vault_secrets · get_key_vault_secret"]
                 F7["AKS\nlist_aks_clusters"]
+                F8["Defender for Cloud\nlist_defender_alerts · get_defender_secure_score\nlist_defender_recommendations"]
+                F9["Azure Advisor\nlist_advisor_recommendations"]
             end
         end
     end
@@ -54,6 +56,8 @@ flowchart TB
         Storage["Azure Storage\nStorageManagementClient"]
         KV["Azure Key Vault\nKeyVaultManagementClient\nSecretClient"]
         AKS["Azure AKS\nContainerServiceClient"]
+        Defender["Defender for Cloud\nSecurityCenter"]
+        Advisor["Azure Advisor\nAdvisorManagementClient"]
     end
 
     ProjectMI -- "1 · request token\naudience: api://<YOUR_ENTRA_APP_CLIENT_ID>" --> EntraApp
@@ -73,6 +77,8 @@ flowchart TB
     M3 --> F5
     M3 --> F6
     M3 --> F7
+    M3 --> F8
+    M3 --> F9
     F1 --> ARG
     F2 --> ARM
     F3 --> ARM
@@ -80,12 +86,16 @@ flowchart TB
     F5 --> Storage
     F6 --> KV
     F7 --> AKS
+    F8 --> Defender
+    F9 --> Advisor
     ARG --> MI_Cred
     ARM --> MI_Cred
     Compute --> MI_Cred
     Storage --> MI_Cred
     KV --> MI_Cred
     AKS --> MI_Cred
+    Defender --> MI_Cred
+    Advisor --> MI_Cred
 ```
 
 ### Component summary
@@ -96,7 +106,7 @@ flowchart TB
 | **Envoy Proxy** | Terminates TLS at the Container App ingress; forwards plain HTTP to port 8080 |
 | **EntraAuthMiddleware** | Pure ASGI middleware; validates Entra Bearer tokens using cached JWKS public keys; bypassed when env vars unset (local dev) |
 | **`_dispatch_message()`** | Routes JSON-RPC methods: `initialize`, `tools/list`, `tools/call`, `ping` |
-| **Tool functions (22)** | `generate_query`/`validate_query` are pure Python; SQL and subscription tools use Resource Graph; VM/Storage/Key Vault/AKS use dedicated Azure SDK clients |
+| **Tool functions (26)** | `generate_query`/`validate_query` are pure Python; SQL and subscription tools use Resource Graph; VM/Storage/Key Vault/AKS/Defender/Advisor use dedicated Azure SDK clients |
 | **DefaultAzureCredential** | Picks up the container's user-assigned MI (`AZURE_CLIENT_ID`) for all Azure SDK calls |
 
 ### MCP tools exposed
@@ -125,6 +135,10 @@ flowchart TB
 | **Azure SQL** | `list_sql_servers` | Lists SQL servers (via Resource Graph) |
 | | `list_sql_databases` | Lists databases on a SQL server (via Resource Graph) |
 | **AKS** | `list_aks_clusters` | Lists AKS clusters |
+| **Defender for Cloud** | `list_defender_alerts` | Lists security alerts, optionally filtered by severity (High/Medium/Low) |
+| | `get_defender_secure_score` | Gets the current/max secure score and percentage for a subscription |
+| | `list_defender_recommendations` | Lists unhealthy security assessment results (non-Healthy only) |
+| **Azure Advisor** | `list_advisor_recommendations` | Lists Advisor recommendations, optionally filtered by category (Cost, Security, Reliability, Performance, OperationalExcellence) |
 
 ---
 
@@ -143,7 +157,7 @@ flowchart TB
     ├── acr.tf                    # Azure Container Registry
     ├── identity.tf               # User-assigned managed identity + AcrPull
     ├── aca.tf                    # Container Apps Environment + Container App
-    ├── rbac.tf                   # 17 role assignments across all Azure services
+    ├── rbac.tf                   # 18 role assignments across all Azure services (incl. Security Reader for Defender)
     ├── foundry.tf                # Foundry project MI → Entra App role assignment
     ├── foundry_mcp_connection.tf # MCP connection in the Foundry project
     ├── outputs.tf                # URLs, client IDs, build commands
@@ -231,6 +245,11 @@ acr_name = "<YOUR_ACR_NAME>"                 # globally unique, e.g. "myarmmcpac
 aca_name         = "arm-mcp-server"
 aca_min_replicas = 0
 aca_max_replicas = 3
+
+# Optional: set to a management group name/ID to scope all RBAC roles at MG level
+# so the server can query resources across ALL child subscriptions.
+# Leave empty ("") to scope roles to the single subscription_id above.
+management_group_id = ""
 
 entra_app_client_id                   = "<YOUR_ENTRA_APP_CLIENT_ID>"
 entra_app_service_principal_object_id = "<YOUR_ENTRA_APP_SP_OBJECT_ID>"
@@ -553,7 +572,7 @@ push to main  ──►  changes job   detect which paths changed
                        └── deploy job   (when deployment/** changed OR terraform just ran)
                              az acr build  →  wait  →  get digest
                              az containerapp update @sha256:…
-                             curl /health  →  assert 22 tools loaded
+                             curl /health  →  assert 26 tools loaded
 ```
 
 Alternatively, trigger it manually from **Actions → Deploy ARM MCP Server → Run workflow** with per-phase checkboxes.

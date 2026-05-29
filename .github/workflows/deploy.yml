@@ -337,8 +337,8 @@ jobs:
           if status != "ok":
               print(f"FAIL — unexpected status: {status}")
               sys.exit(1)
-          if tools < 22:
-              print(f"FAIL — expected 22 tools, got {tools}")
+          if tools < 26:
+              print(f"FAIL — expected 26 tools, got {tools}")
               sys.exit(1)
           if warnings:
               print(f"WARNING — SDK issues: {warnings}")
