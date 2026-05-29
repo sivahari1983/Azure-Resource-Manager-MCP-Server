@@ -234,4 +234,5 @@ resource "azurerm_role_assignment" "mcp_security_reader" {
 # Azure Batch                       → Reader
 # Azure API Management              → Reader
 # Azure SignalR                     → Reader
+# Azure Advisor                     → Reader (list recommendations across all categories)
 # =============================================================================
