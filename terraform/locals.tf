@@ -1,4 +1,11 @@
 locals {
+  # Scope for all subscription-level RBAC role assignments.
+  # Set management_group_id in terraform.tfvars to grant the MI access across
+  # all child subscriptions in that management group.
+  rbac_scope = var.management_group_id != "" ? (
+    "/providers/Microsoft.Management/managementGroups/${var.management_group_id}"
+  ) : "/subscriptions/${var.subscription_id}"
+
   # Use explicit container image if provided, otherwise default to the ACR image.
   # The image must be built and pushed before `terraform apply` (see README).
   container_image = var.container_image != "" ? var.container_image : "${azurerm_container_registry.acr.login_server}/arm-mcp:latest"

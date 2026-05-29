@@ -16,7 +16,7 @@ resource "azurerm_container_app" "arm_mcp" {
   # Enables per-user Azure access for human callers (scp token claim).
   # Leave empty to keep the current behaviour (all callers use the server MI).
   dynamic "secret" {
-    for_each = var.entra_app_client_secret != "" ? [1] : []
+    for_each = toset(var.entra_app_client_secret != "" ? ["enabled"] : [])
     content {
       name  = "entra-client-secret"
       value = var.entra_app_client_secret
@@ -78,7 +78,7 @@ resource "azurerm_container_app" "arm_mcp" {
       }
       # OBO client secret — only injected when the variable is set.
       dynamic "env" {
-        for_each = var.entra_app_client_secret != "" ? [1] : []
+        for_each = toset(var.entra_app_client_secret != "" ? ["enabled"] : [])
         content {
           name        = "ENTRA_APP_CLIENT_SECRET"
           secret_name = "entra-client-secret"

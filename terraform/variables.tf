@@ -3,6 +3,12 @@ variable "subscription_id" {
   description = "Azure subscription ID where the ARM MCP Server will be deployed (az account show --query id -o tsv)"
 }
 
+variable "management_group_id" {
+  type        = string
+  description = "Management group name/ID to scope all RBAC role assignments. When set, the MI receives roles at MG level and can query all child subscriptions. Leave empty to scope roles to subscription_id only."
+  default     = ""
+}
+
 variable "tenant_id" {
   type        = string
   description = "Azure AD / Entra ID tenant ID (az account show --query tenantId -o tsv)"

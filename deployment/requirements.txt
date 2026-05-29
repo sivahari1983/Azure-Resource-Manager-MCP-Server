@@ -10,3 +10,5 @@ azure-mgmt-storage>=21.0.0
 azure-mgmt-keyvault>=10.0.0
 azure-keyvault-secrets>=4.7.0
 azure-mgmt-containerservice>=28.0.0
+azure-mgmt-security>=3.0.0
+azure-mgmt-advisor>=9.0.0

@@ -26,7 +26,7 @@
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_subscription_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -69,13 +69,13 @@ resource "azurerm_role_assignment" "mcp_storage_table_reader" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_keyvault_secrets_user" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
 
 resource "azurerm_role_assignment" "mcp_keyvault_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Key Vault Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -87,7 +87,7 @@ resource "azurerm_role_assignment" "mcp_keyvault_reader" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_cognitive_services_user" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Cognitive Services User"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -99,7 +99,7 @@ resource "azurerm_role_assignment" "mcp_cognitive_services_user" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_servicebus_data_receiver" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Azure Service Bus Data Receiver"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -111,7 +111,7 @@ resource "azurerm_role_assignment" "mcp_servicebus_data_receiver" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_eventgrid_subscription_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "EventGrid EventSubscription Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -122,7 +122,7 @@ resource "azurerm_role_assignment" "mcp_eventgrid_subscription_reader" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_eventhub_data_receiver" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Azure Event Hubs Data Receiver"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -142,7 +142,7 @@ resource "azurerm_role_assignment" "mcp_eventhub_data_receiver" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_cosmosdb_account_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Cosmos DB Account Reader Role"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -155,13 +155,13 @@ resource "azurerm_role_assignment" "mcp_cosmosdb_account_reader" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_log_analytics_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Log Analytics Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
 
 resource "azurerm_role_assignment" "mcp_monitoring_reader" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Monitoring Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -174,7 +174,7 @@ resource "azurerm_role_assignment" "mcp_monitoring_reader" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_vm_contributor" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Virtual Machine Contributor"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
@@ -186,8 +186,22 @@ resource "azurerm_role_assignment" "mcp_vm_contributor" {
 # =============================================================================
 
 resource "azurerm_role_assignment" "mcp_tag_contributor" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = local.rbac_scope
   role_definition_name = "Tag Contributor"
+  principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
+}
+
+# =============================================================================
+# 13. DEFENDER FOR CLOUD
+#     Security Reader grants read access to security alerts, secure scores,
+#     and assessment results (recommendations).
+#     Required by: list_defender_alerts, get_defender_secure_score,
+#                  list_defender_recommendations MCP tools.
+# =============================================================================
+
+resource "azurerm_role_assignment" "mcp_security_reader" {
+  scope                = local.rbac_scope
+  role_definition_name = "Security Reader"
   principal_id         = azurerm_user_assigned_identity.mcp_mi.principal_id
 }
 

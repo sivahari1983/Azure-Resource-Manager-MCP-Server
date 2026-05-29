@@ -50,6 +50,8 @@ StorageManagementClient = None
 KeyVaultManagementClient = None
 KvSecretClient = None
 ContainerServiceClient = None
+SecurityCenter = None
+AdvisorManagementClient = None
 
 _svc_import_errors: list[str] = []
 
@@ -59,6 +61,8 @@ for _pkg, _sym, _mod in [
     ("azure-mgmt-keyvault",         "KeyVaultManagementClient",  "azure.mgmt.keyvault"),
     ("azure-keyvault-secrets",      "KvSecretClient",            "azure.keyvault.secrets"),
     ("azure-mgmt-containerservice", "ContainerServiceClient",    "azure.mgmt.containerservice"),
+    ("azure-mgmt-security",         "SecurityCenter",            "azure.mgmt.security"),
+    ("azure-mgmt-advisor",          "AdvisorManagementClient",   "azure.mgmt.advisor"),
 ]:
     try:
         import importlib as _il
@@ -661,6 +665,136 @@ async def _list_aks_clusters(subscription_id: str, resource_group: str | None = 
 
 
 # ---------------------------------------------------------------------------
+# Tool implementations — Microsoft Defender for Cloud
+# ---------------------------------------------------------------------------
+async def _list_defender_alerts(subscription_id: str, severity: str | None = None) -> str:
+    """List Microsoft Defender for Cloud security alerts, optionally filtered by severity."""
+    if SecurityCenter is None:
+        return "Error: azure-mgmt-security package not available."
+    credential = _ctx_credential.get(None) or _credential
+    if not credential:
+        return "Error: Azure credentials not initialized."
+    try:
+        client = SecurityCenter(credential=credential, subscription_id=subscription_id)
+        alerts = list(client.alerts.list())
+        result = []
+        for a in alerts:
+            sev = str(a.severity) if a.severity else "Unknown"
+            if severity and sev.lower() != severity.lower():
+                continue
+            result.append({
+                "name": a.name,
+                "display_name": getattr(a, "alert_display_name", None) or getattr(a, "display_name", None),
+                "severity": sev,
+                "status": str(a.status) if a.status else None,
+                "compromised_entity": getattr(a, "compromised_entity", None),
+                "time_generated": str(a.time_generated_utc) if getattr(a, "time_generated_utc", None) else None,
+                "description": getattr(a, "description", None),
+                "resource_ids": [
+                    getattr(r, "azure_resource_id", None) or getattr(r, "id", None)
+                    for r in (getattr(a, "resource_identifiers", None) or [])
+                ],
+            })
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return f"Error listing Defender alerts: {e}"
+
+
+async def _get_defender_secure_score(subscription_id: str) -> str:
+    """Get the Microsoft Defender for Cloud secure score for a subscription."""
+    if SecurityCenter is None:
+        return "Error: azure-mgmt-security package not available."
+    credential = _ctx_credential.get(None) or _credential
+    if not credential:
+        return "Error: Azure credentials not initialized."
+    try:
+        client = SecurityCenter(credential=credential, subscription_id=subscription_id)
+        scores = list(client.secure_scores.list())
+        result = []
+        for s in scores:
+            result.append({
+                "name": s.name,
+                "display_name": getattr(s, "display_name", None),
+                "current_score": getattr(s, "current", None),
+                "max_score": getattr(s, "max", None),
+                "percentage": getattr(s, "percentage", None),
+                "weight": getattr(s, "weight", None),
+            })
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return f"Error getting Defender secure score: {e}"
+
+
+async def _list_defender_recommendations(subscription_id: str) -> str:
+    """List unhealthy Microsoft Defender for Cloud security assessment results."""
+    if SecurityCenter is None:
+        return "Error: azure-mgmt-security package not available."
+    credential = _ctx_credential.get(None) or _credential
+    if not credential:
+        return "Error: Azure credentials not initialized."
+    try:
+        client = SecurityCenter(credential=credential, subscription_id=subscription_id)
+        scope = f"/subscriptions/{subscription_id}"
+        assessments = list(client.assessments.list(scope=scope))
+        result = []
+        for a in assessments:
+            status = getattr(a, "status", None)
+            code = str(status.code) if status and status.code else None
+            if code == "Healthy":
+                continue
+            resource_details = getattr(a, "resource_details", None)
+            result.append({
+                "name": a.name,
+                "display_name": getattr(a, "display_name", None) or a.name,
+                "status": code,
+                "cause": getattr(status, "cause", None),
+                "description": getattr(status, "description", None),
+                "resource_id": getattr(resource_details, "id", None),
+            })
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return f"Error listing Defender recommendations: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool implementations — Azure Advisor
+# ---------------------------------------------------------------------------
+async def _list_advisor_recommendations(
+    subscription_id: str, category: str | None = None
+) -> str:
+    """List Azure Advisor recommendations, optionally filtered by category."""
+    if AdvisorManagementClient is None:
+        return "Error: azure-mgmt-advisor package not available."
+    credential = _ctx_credential.get(None) or _credential
+    if not credential:
+        return "Error: Azure credentials not initialized."
+    try:
+        client = AdvisorManagementClient(credential=credential, subscription_id=subscription_id)
+        recs = list(client.recommendations.list())
+        result = []
+        for r in recs:
+            cat = str(r.category) if getattr(r, "category", None) else None
+            if category and cat and cat.lower() != category.lower():
+                continue
+            desc = getattr(r, "short_description", None)
+            result.append({
+                "id": r.id,
+                "name": r.name,
+                "category": cat,
+                "impact": str(r.impact) if getattr(r, "impact", None) else None,
+                "impacted_field": getattr(r, "impacted_field", None),
+                "impacted_value": getattr(r, "impacted_value", None),
+                "problem": getattr(desc, "problem", None),
+                "solution": getattr(desc, "solution", None),
+                "potential_benefits": getattr(r, "potential_benefits", None),
+                "last_updated": str(r.last_updated) if getattr(r, "last_updated", None) else None,
+            })
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return f"Error listing Advisor recommendations: {e}"
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registry
 # ---------------------------------------------------------------------------
 _TOOLS = [
@@ -971,6 +1105,62 @@ _TOOLS = [
             "required": ["subscription_id"],
         },
     },
+    # --- Defender for Cloud ---
+    {
+        "name": "list_defender_alerts",
+        "description": "List Microsoft Defender for Cloud security alerts, optionally filtered by severity (High, Medium, Low, Informational).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {"type": "string"},
+                "severity": {
+                    "type": "string",
+                    "description": "Optional severity filter: High, Medium, Low, or Informational",
+                    "enum": ["High", "Medium", "Low", "Informational"],
+                },
+            },
+            "required": ["subscription_id"],
+        },
+    },
+    {
+        "name": "get_defender_secure_score",
+        "description": "Get the Microsoft Defender for Cloud secure score (current score, max score, and percentage) for a subscription.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {"type": "string"},
+            },
+            "required": ["subscription_id"],
+        },
+    },
+    {
+        "name": "list_defender_recommendations",
+        "description": "List unhealthy Microsoft Defender for Cloud security assessment results (security recommendations) for a subscription.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {"type": "string"},
+            },
+            "required": ["subscription_id"],
+        },
+    },
+    # --- Azure Advisor ---
+    {
+        "name": "list_advisor_recommendations",
+        "description": "List Azure Advisor recommendations, optionally filtered by category (Cost, Security, Reliability, Performance, OperationalExcellence).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {"type": "string"},
+                "category": {
+                    "type": "string",
+                    "description": "Optional category filter",
+                    "enum": ["Cost", "Security", "Reliability", "Performance", "OperationalExcellence"],
+                },
+            },
+            "required": ["subscription_id"],
+        },
+    },
 ]
 
 _TOOL_DISPATCH = {
@@ -1004,6 +1194,12 @@ _TOOL_DISPATCH = {
     "list_sql_databases":                 lambda args: _list_sql_databases(**args),
     # AKS
     "list_aks_clusters":                  lambda args: _list_aks_clusters(**args),
+    # Defender for Cloud
+    "list_defender_alerts":               lambda args: _list_defender_alerts(**args),
+    "get_defender_secure_score":          lambda args: _get_defender_secure_score(**args),
+    "list_defender_recommendations":      lambda args: _list_defender_recommendations(**args),
+    # Azure Advisor
+    "list_advisor_recommendations":       lambda args: _list_advisor_recommendations(**args),
 }
 
 
